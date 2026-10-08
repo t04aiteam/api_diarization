@@ -1,15 +1,20 @@
 """
-Optional pyannote.audio diarization backend (speaker segmentation only, no
-transcription — `transcribes = False`).
+pyannote diarization backend (speaker segmentation only, no transcription:
+`transcribes = False`, segment text is null).
 
-Disabled by default per the HDSD doc: `pyannote/speaker-diarization-3.1` is a
-gated model not present in the offline cache. Enabling it needs internet + a
-valid HF_TOKEN with the model's terms accepted on huggingface.co.
-`pyannote.audio` is imported lazily in `load()` so the app can start fine
-even when the package isn't installed while this backend stays disabled.
+A client of ai-audio-jobs' `pyannote_server.py` (222:6426) instead of loading
+pyannote here: one pyannote setup for the job API and for direct callers
+(offline weights without a token, clustering threshold 0.55, speaker counts
+that never merge people), and no pyannote packages in diar-env. Enable with
+ENABLED_MODELS=vibevoice,pyannote and PYANNOTE_URL=http://127.0.0.1:6426.
+PYANNOTE_TIMEOUT (seconds, default 10800) covers a 60-min file on CPU.
 """
 
+import json
 import os
+import urllib.error
+import urllib.request
+import uuid
 from typing import Optional
 
 from models.base import Backend, DiarizeResult, Segment
@@ -21,37 +26,64 @@ class PyannoteBackend(Backend):
     name = "pyannote"
     model_id = MODEL_ID
     transcribes = False
+    remote = True
 
     def __init__(self):
-        self._pipeline = None
+        self._url = None
 
     def load(self) -> None:
-        hf_token = os.getenv("HF_TOKEN") or None
-        if not hf_token:
+        url = os.getenv("PYANNOTE_URL", "").rstrip("/")
+        if not url:
             raise RuntimeError(
-                "pyannote backend requires HF_TOKEN (gated model) and internet access "
-                "to fetch it the first time; it cannot run fully offline."
+                "pyannote backend needs PYANNOTE_URL (the pyannote service, e.g. "
+                "http://127.0.0.1:6426)"
             )
-        from pyannote.audio import Pipeline
+        try:
+            urllib.request.urlopen(f"{url}/health", timeout=10).close()
+        except OSError as exc:
+            raise RuntimeError(
+                f"pyannote service {url} is not reachable: {exc}"
+            ) from exc
+        self._url = url
 
-        self._pipeline = Pipeline.from_pretrained(self.model_id, use_auth_token=hf_token)
-
-    def run(self, audio_path: str, hotwords: Optional[str], max_new_tokens: int) -> DiarizeResult:
-        # pyannote.audio's Pipeline accepts a file path directly and does its
-        # own decoding/resampling; no transcription support, so hotwords are
-        # irrelevant here.
-        diarization = self._pipeline(audio_path)
-
-        segments = []
-        for turn, _, speaker_label in diarization.itertracks(yield_label=True):
-            digits = "".join(filter(str.isdigit, speaker_label))
-            speaker_id = int(digits) if digits else 0
-            segments.append(
+    def run(
+        self, audio_path: str, hotwords: Optional[str], max_new_tokens: int
+    ) -> DiarizeResult:
+        # hotwords and max_new_tokens only steer transcription, which pyannote does not do.
+        with open(audio_path, "rb") as fh:
+            data = fh.read()
+        boundary = uuid.uuid4().hex
+        name = os.path.basename(audio_path)
+        body = (
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                f'filename="{name}"\r\nContent-Type: application/octet-stream\r\n\r\n'
+            ).encode()
+            + data
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        req = urllib.request.Request(
+            f"{self._url}/diarize",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        timeout = float(os.getenv("PYANNOTE_TIMEOUT", "10800"))
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                answer = json.load(resp)
+        except urllib.error.HTTPError as exc:
+            raise RuntimeError(
+                f"pyannote service answered {exc.code}: {exc.read().decode(errors='replace')}"
+            ) from exc
+        return DiarizeResult(
+            segments=[
                 Segment(
-                    start_time=round(turn.start, 2),
-                    end_time=round(turn.end, 2),
-                    speaker_id=speaker_id,
-                    text=None,  # pyannote is diarization-only, no transcription
+                    start_time=s["start_time"],
+                    end_time=s["end_time"],
+                    speaker_id=s["speaker_id"],
+                    text=None,
                 )
-            )
-        return DiarizeResult(segments=segments)
+                for s in answer["segments"]
+            ],
+            warning=answer.get("warning"),
+        )

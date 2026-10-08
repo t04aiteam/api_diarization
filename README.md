@@ -18,7 +18,7 @@ see [First Run / Model Download](#first-run--model-download) below.
 | Backend     | Model                                | Transcribes | Enabled by default |
 |-------------|----------------------------------------|-------------|----------------------|
 | `vibevoice` | `microsoft/VibeVoice-ASR` (9B, Qwen2.5-7B base) | Yes | Yes |
-| `pyannote`  | `pyannote/speaker-diarization-3.1`     | No (diarization only) | No — gated model, needs internet + `HF_TOKEN` |
+| `pyannote`  | `pyannote/speaker-diarization-3.1`     | No (diarization only) | No — needs the pyannote service (`PYANNOTE_URL`) |
 
 `vibevoice` isn't a standard `transformers.pipeline()` model — it's a custom
 `VibeVoiceASRForConditionalGeneration` + `VibeVoiceASRProcessor` pair distributed via the
@@ -101,7 +101,7 @@ Form fields:
 | Key              | Type | Required | Notes                                                              |
 |-------------------|------|----------|------------------------------------------------------------------------|
 | `file`            | File | Yes      | Recording: wav/flac/mp3/ogg/m4a... max 500 MB, max 60 min               |
-| `model`           | Text | No       | Backend to use; default `vibevoice` (`pyannote` disabled by default)    |
+| `model`           | Text | No       | Backend to use; default `vibevoice`; `pyannote` when enabled (segment text is null)    |
 | `hotwords`        | Text | No       | Comma-separated proper nouns/terms to improve transcription accuracy    |
 | `max_new_tokens`  | Text | No       | Generation token limit, 1–65536; default 32768                         |
 
@@ -154,7 +154,7 @@ routes/diarize.py      # /models, /diarize
 models/base.py         # Backend interface + Segment/DiarizeResult
 models/registry.py     # enabled/default backend resolution (.env-driven), GPU lock
 models/vibevoice.py    # VibeVoice ASR backend (transcribes=True)
-models/pyannote.py     # pyannote diarization backend (transcribes=False, disabled by default)
+models/pyannote.py     # pyannote backend: client of the pyannote service (transcribes=False)
 models/audio_utils.py  # lightweight duration-check decode (0.1s / 60min validation)
 schemas/response.py
 requirements.txt
@@ -166,9 +166,12 @@ requirements.txt
 - **Serialized GPU access**: only one `/diarize` inference runs at a time
   (`models/registry.py`'s `inference_lock`); concurrent requests queue rather than run in
   parallel.
-- **Enabling `pyannote`**: set `ENABLED_MODELS=vibevoice,pyannote` and `HF_TOKEN` in
-  `.env`, `pip install pyannote.audio`, and ensure the host has internet the first time it
-  downloads (gated model, terms must be accepted on huggingface.co).
+- **Enabling `pyannote`**: run ai-audio-jobs' `pyannote_server.py` (222:6426, offline,
+  no token, threshold 0.55; `DEVICE=cuda` for a GPU) and set
+  `ENABLED_MODELS=vibevoice,pyannote` and `PYANNOTE_URL=http://127.0.0.1:6426`. Nothing
+  pyannote is installed in this env. pyannote requests skip the GPU lock above (they
+  queue in the pyannote service). Gate tests:
+  `diar-env/bin/python -m unittest discover -s tests` (no GPU, no weights).
 - **First-run download vs. locked-down mode**: with the default `.env.example` settings
   (`LOCAL_FILES_ONLY=0`, `HF_HUB_OFFLINE=0`, `TRANSFORMERS_OFFLINE=0`), the service can
   always fall back to the Hub — convenient for this test environment, but it means a

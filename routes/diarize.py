@@ -31,7 +31,10 @@ async def list_models():
 
 def _run_inference(backend, audio_path, hotwords, max_new_tokens):
     # Only one inference request touches the GPU at a time (per HDSD doc);
-    # concurrent requests block here and are served in order.
+    # concurrent requests block here and are served in order. A remote backend
+    # (pyannote) queues in its own service, so it must not hold this lock.
+    if getattr(backend, "remote", False):
+        return backend.run(audio_path, hotwords, max_new_tokens)
     with registry.inference_lock():
         return backend.run(audio_path, hotwords, max_new_tokens)
 

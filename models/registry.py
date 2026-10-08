@@ -1,9 +1,9 @@
 """Backend registry: which ASR/diarization backends exist, which are enabled,
 and which is the default — all driven by .env, per the HDSD doc.
 
-Only the `vibevoice` backend is enabled by default: `pyannote` needs internet
-+ a valid HF_TOKEN (gated model, not present in the offline cache), so it
-stays off unless the operator explicitly adds it to ENABLED_MODELS.
+Only the `vibevoice` backend is enabled by default. `pyannote` is a client of
+the pyannote service (ai-audio-jobs pyannote_server.py): add it to
+ENABLED_MODELS and set PYANNOTE_URL.
 """
 
 import os
