@@ -1,0 +1,28 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+python-dotenv>=1.0.0
+torch>=2.2.0
+transformers>=4.44.0
+accelerate>=0.30.0
+sentencepiece>=0.2.0
+einops>=0.7.0
+librosa>=0.10.1
+soundfile>=0.12.1
+numpy>=1.24.0
+
+# The vibevoice package (VibeVoiceASRForConditionalGeneration,
+# VibeVoiceASRProcessor) isn't on PyPI — install from the source repo.
+# `from_pretrained("microsoft/VibeVoice-ASR", ...)` then downloads and
+# caches the ~18 GB of weights from the Hub on first run.
+vibevoice @ git+https://github.com/microsoft/VibeVoice.git
+
+# Optional, CUDA only: enables flash_attention_2 instead of the sdpa
+# fallback. Requires a matching CUDA toolkit + ninja to build; skip it if
+# that build gives you trouble, the app auto-falls back to "sdpa".
+# flash-attn>=2.5.0
+
+# Optional: only needed if enabling the pyannote backend
+# (ENABLED_MODELS includes "pyannote"). Requires internet + a HF_TOKEN with
+# the model's terms accepted at huggingface.co the first time it downloads.
+# pyannote.audio>=3.1.0

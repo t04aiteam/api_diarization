@@ -1,0 +1,7 @@
+diar-env/
+pyannote-env/
+__pycache__/
+*.pyc
+.env
+.hf_token
+*.log
