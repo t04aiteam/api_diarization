@@ -26,7 +26,6 @@ class PyannoteBackend(Backend):
     name = "pyannote"
     model_id = MODEL_ID
     transcribes = False
-    remote = True
 
     def __init__(self):
         self._url = None

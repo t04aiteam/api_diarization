@@ -13,9 +13,7 @@ Failure modes pinned here:
   failing at load with a clear message;
 - a pyannote service error becomes a 200 instead of a 500 with its detail;
 - with pyannote enabled, a pyannote request loads VibeVoice (18 GB);
-- a request for a backend not in ENABLED_MODELS gets past the 400;
-- a pyannote request holds the VibeVoice GPU lock while the remote service
-  works (up to an hour on a 60-min file), stalling VibeVoice callers.
+- a request for a backend not in ENABLED_MODELS gets past the 400.
 
 Run with diar-env (needs fastapi + httpx, no GPU, no weights):
     diar-env/bin/python -m unittest discover -s tests -v
@@ -191,7 +189,6 @@ class RouteTests(unittest.TestCase):
         self.addCleanup(self.fake.close)
         self.enterContext(mock.patch.dict(os.environ, {"PYANNOTE_URL": self.fake.url}))
         self.client, registry = client("vibevoice,pyannote")
-        self.registry = registry
         self.built = []
         real_build = registry._build
         self.enterContext(
@@ -229,23 +226,6 @@ class RouteTests(unittest.TestCase):
         r = self.post("pyannote")
         self.assertEqual(r.status_code, 500)
         self.assertIn("boom", r.json()["detail"])
-
-    def test_a_pyannote_request_leaves_the_vibevoice_lock_free(self):
-        seen = []
-        from models.pyannote import PyannoteBackend
-
-        real_run = PyannoteBackend.run
-
-        def run(backend, *args):
-            lock = self.registry.inference_lock()
-            seen.append(lock.acquire(blocking=False))
-            if seen[-1]:
-                lock.release()
-            return real_run(backend, *args)
-
-        with mock.patch("models.pyannote.PyannoteBackend.run", run):
-            self.assertEqual(self.post("pyannote").status_code, 200)
-        self.assertEqual(seen, [True])
 
     def test_a_disabled_backend_is_still_a_400(self):
         self.client, _ = client("vibevoice")

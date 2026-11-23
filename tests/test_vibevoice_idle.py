@@ -5,6 +5,7 @@ import importlib
 import os
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from models import registry
@@ -30,7 +31,6 @@ class VibeVoiceIdleTests(unittest.IsolatedAsyncioTestCase):
 
         class Backend:
             model_id = name
-            remote = name == "pyannote"
 
             def load(self):
                 test.calls.append((name, "load"))
@@ -88,3 +88,24 @@ class VibeVoiceIdleTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.calls.count(("vibevoice", "load")), 1)
             self.assertEqual(self.calls.count(("pyannote", "load")), 1)
             self.assertNotIn(("pyannote", "unload"), self.calls)
+
+    async def test_queued_vibevoice_leaves_executor_capacity_for_pyannote(self):
+        self.setup_backends("vibevoice")
+        asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=2))
+        async with registry.lifespan(None):
+            active = asyncio.create_task(registry.run("vibevoice", "blocked", None, 10))
+            queued = None
+            try:
+                self.assertTrue(await asyncio.to_thread(self.started.wait, 2))
+                queued = asyncio.create_task(registry.run("vibevoice", "queued", None, 10))
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                remote = await asyncio.wait_for(registry.run("pyannote", "remote", None, 10), 1)
+                self.assertEqual(remote[0], "pyannote")
+                self.assertFalse(active.done())
+                self.assertFalse(queued.done())
+            finally:
+                self.release.set()
+                await active
+                if queued is not None:
+                    await queued
