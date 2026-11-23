@@ -167,14 +167,12 @@ requirements.txt
 
 ## Operational Notes
 
-- **Serialized GPU access**: only one `/diarize` inference runs at a time
-  (`models/registry.py`'s `inference_lock`); concurrent requests queue rather than run in
-  parallel.
+- **VibeVoice concurrency**: the service runs one VibeVoice inference at a time.
+  Queued VibeVoice requests wait without holding a worker thread.
 - **Enabling `pyannote`**: run ai-audio-jobs' `pyannote_server.py` (222:6426, offline,
   no token, threshold 0.55; `DEVICE=cuda` for a GPU) and set
   `ENABLED_MODELS=vibevoice,pyannote` and `PYANNOTE_URL=http://127.0.0.1:6426`. Nothing
-  pyannote is installed in this env. pyannote requests skip the GPU lock above (they
-  queue in the pyannote service). Gate tests:
+  pyannote is installed in this env. pyannote requests queue independently in the pyannote service. Gate tests:
   `diar-env/bin/python -m unittest discover -s tests` (no GPU, no weights).
 - **First-run download vs. locked-down mode**: with the default `.env.example` settings
   (`LOCAL_FILES_ONLY=0`, `HF_HUB_OFFLINE=0`, `TRANSFORMERS_OFFLINE=0`), the service can

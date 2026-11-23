@@ -54,7 +54,9 @@ class IdleModel:
             if self._loading is None:
                 self._loading = asyncio.create_task(self._reload())
             await self._loading
-        return await asyncio.to_thread(infer, *args)
+        # Wait in the event loop so queued inference cannot tie up worker threads.
+        async with self._lock:
+            return await asyncio.to_thread(infer, *args)
 
     async def _reload(self):
         try:

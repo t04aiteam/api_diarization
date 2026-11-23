@@ -23,7 +23,6 @@ ALL_BACKENDS = {
 
 _INSTANCES = {}
 _LOAD_LOCKS = {}
-_INFERENCE_LOCK = threading.Lock()  # only one inference request on the GPU at a time
 
 
 def _build(name: str):
@@ -76,13 +75,7 @@ async def lifespan(_app):
 
 def _run_backend(name, audio_path, hotwords, max_new_tokens):
     backend = _get_backend(name)
-    if getattr(backend, "remote", False):
-        result = backend.run(audio_path, hotwords, max_new_tokens)
-    else:
-        # Local inference is serialized. Remote pyannote queues independently.
-        with inference_lock():
-            result = backend.run(audio_path, hotwords, max_new_tokens)
-    return backend.model_id, result
+    return backend.model_id, backend.run(audio_path, hotwords, max_new_tokens)
 
 
 async def run(name, audio_path, hotwords, max_new_tokens):
@@ -105,7 +98,3 @@ def models_status() -> dict:
 
 def enabled_models_simple() -> dict:
     return {name: meta["model_id"] for name, meta in ALL_BACKENDS.items() if is_enabled(name)}
-
-
-def inference_lock() -> threading.Lock:
-    return _INFERENCE_LOCK
