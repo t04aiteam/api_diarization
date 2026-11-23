@@ -24,6 +24,7 @@ warm to lock the service into fully-offline mode, mirroring production.
 Reference: https://github.com/microsoft/VibeVoice
 """
 
+import gc
 import os
 from typing import Optional
 
@@ -111,6 +112,13 @@ class VibeVoiceBackend(Backend):
             token=HF_TOKEN,
         )
         self._model = self._model.to(self._device).eval()
+
+    def unload(self) -> None:
+        self._model = None
+        self._processor = None
+        gc.collect()
+        if self._device == "cuda":
+            torch.cuda.empty_cache()
 
     def run(self, audio_path: str, hotwords: Optional[str], max_new_tokens: int) -> DiarizeResult:
         context_info = hotwords.strip() if hotwords and hotwords.strip() else None

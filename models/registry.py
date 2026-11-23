@@ -6,8 +6,12 @@ the pyannote service (ai-audio-jobs pyannote_server.py): add it to
 ENABLED_MODELS and set PYANNOTE_URL.
 """
 
+import asyncio
 import os
 import threading
+from contextlib import asynccontextmanager
+
+from models.idle import IdleModel
 
 DEFAULT_MODEL = os.getenv("DEFAULT_MODEL", "vibevoice")
 _ENABLED = {b.strip() for b in os.getenv("ENABLED_MODELS", "vibevoice").split(",") if b.strip()}
@@ -38,8 +42,8 @@ def is_enabled(name: str) -> bool:
     return name in _ENABLED and name in ALL_BACKENDS
 
 
-def get_backend(name: str):
-    """Lazily load (once) and return the backend instance for `name`."""
+def _get_backend(name: str):
+    """Get the current backend instance, loading it if necessary."""
     if not is_enabled(name):
         raise KeyError(f"backend '{name}' is not enabled")
     lock = _LOAD_LOCKS.setdefault(name, threading.Lock())
@@ -51,9 +55,41 @@ def get_backend(name: str):
     return _INSTANCES[name]
 
 
-def preload_default() -> None:
-    """Load the default backend at startup so the first request isn't slow."""
-    get_backend(DEFAULT_MODEL)
+def _unload_vibevoice() -> None:
+    _INSTANCES.pop("vibevoice").unload()
+
+
+_vibevoice = IdleModel(
+    lambda: _get_backend("vibevoice"),
+    _unload_vibevoice,
+    int(os.getenv("MODEL_IDLE_SECONDS", "0")),
+)
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    if DEFAULT_MODEL != "vibevoice":
+        await asyncio.to_thread(_get_backend, DEFAULT_MODEL)
+    async with _vibevoice.lifespan(preload=DEFAULT_MODEL == "vibevoice"):
+        yield
+
+
+def _run_backend(name, audio_path, hotwords, max_new_tokens):
+    backend = _get_backend(name)
+    if getattr(backend, "remote", False):
+        result = backend.run(audio_path, hotwords, max_new_tokens)
+    else:
+        # Local inference is serialized. Remote pyannote queues independently.
+        with inference_lock():
+            result = backend.run(audio_path, hotwords, max_new_tokens)
+    return backend.model_id, result
+
+
+async def run(name, audio_path, hotwords, max_new_tokens):
+    args = (name, audio_path, hotwords, max_new_tokens)
+    if name == "vibevoice":
+        return await _vibevoice.run(_run_backend, *args)
+    return await asyncio.to_thread(_run_backend, *args)
 
 
 def models_status() -> dict:

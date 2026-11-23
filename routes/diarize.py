@@ -29,14 +29,37 @@ async def list_models():
     }
 
 
-def _run_inference(backend, audio_path, hotwords, max_new_tokens):
-    # Only one inference request touches the GPU at a time (per HDSD doc);
-    # concurrent requests block here and are served in order. A remote backend
-    # (pyannote) queues in its own service, so it must not hold this lock.
-    if getattr(backend, "remote", False):
-        return backend.run(audio_path, hotwords, max_new_tokens)
-    with registry.inference_lock():
-        return backend.run(audio_path, hotwords, max_new_tokens)
+async def _diarize_file(tmp_path, model, hotwords, max_new_tokens):
+    try:
+        try:
+            # Only used to validate duration up-front; the backend itself
+            # decodes audio_path directly (VibeVoiceASRProcessor / pyannote's
+            # Pipeline both accept a file path and handle their own resample).
+            _, duration = await asyncio.to_thread(decode_audio, tmp_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if duration < MIN_AUDIO_SECONDS:
+            raise HTTPException(status_code=400, detail=f"Audio is shorter than {MIN_AUDIO_SECONDS}s")
+        if duration > MAX_AUDIO_SECONDS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Audio exceeds the {MAX_AUDIO_SECONDS}s (max 60 min) limit",
+            )
+
+        try:
+            model_id, result = await registry.run(model, tmp_path, hotwords, max_new_tokens)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Inference failed: {exc}") from exc
+    finally:
+        os.unlink(tmp_path)
+
+    return model_id, result, duration
+
+
+def _observe_completion(task):
+    if not task.cancelled():
+        task.exception()
 
 
 @router.post("/diarize", response_model=DiarizeResponse)
@@ -67,44 +90,21 @@ async def diarize(
     if not data:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    loop = asyncio.get_event_loop()
-
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
 
-    try:
-        try:
-            # Only used to validate duration up-front; the backend itself
-            # decodes audio_path directly (VibeVoiceASRProcessor / pyannote's
-            # Pipeline both accept a file path and handle their own resample).
-            _, duration = await loop.run_in_executor(None, decode_audio, tmp_path)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-        if duration < MIN_AUDIO_SECONDS:
-            raise HTTPException(status_code=400, detail=f"Audio is shorter than {MIN_AUDIO_SECONDS}s")
-        if duration > MAX_AUDIO_SECONDS:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Audio exceeds the {MAX_AUDIO_SECONDS}s (max 60 min) limit",
-            )
-
-        try:
-            backend = await loop.run_in_executor(None, registry.get_backend, model)
-            result = await loop.run_in_executor(
-                None, _run_inference, backend, tmp_path, hotwords, max_new_tokens
-            )
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Inference failed: {exc}") from exc
-    finally:
-        os.unlink(tmp_path)
+    # Keep the temporary audio available until the worker finishes, even if
+    # the client cancels while a model is loading or inference is still running.
+    work = asyncio.create_task(_diarize_file(tmp_path, model, hotwords, max_new_tokens))
+    work.add_done_callback(_observe_completion)
+    model_id, result, duration = await asyncio.shield(work)
 
     speakers = sorted({s.speaker_id for s in result.segments})
     return {
         "filename": filename,
         "model": model,
-        "model_id": backend.model_id,
+        "model_id": model_id,
         "duration_seconds": round(duration, 2),
         "num_speakers": len(speakers),
         "speakers": speakers,

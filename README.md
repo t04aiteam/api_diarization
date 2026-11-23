@@ -73,6 +73,10 @@ uvicorn main:app --host 0.0.0.0 --port 6421
 
 **Do not pass `--reload`**: every autoreload would reload ~18 GB of weights onto the GPU.
 
+`MODEL_IDLE_SECONDS` controls when VibeVoice releases its model and processor after
+the last inference completes. The default is `0` (disabled). While unloaded,
+`/health` stays available and the next VibeVoice request reloads the model.
+
 `/health` only responds once the FastAPI `lifespan` startup hook (which preloads the
 default backend — including the first-run download, if needed) has finished — wait for it
 before calling `/diarize`.

@@ -29,7 +29,7 @@ class Backend(ABC):
 
     @abstractmethod
     def load(self) -> None:
-        """Load weights into memory/GPU. Called once, lazily, on first use."""
+        """Load weights into memory/GPU. Called when the service needs a new backend instance."""
 
     @abstractmethod
     def run(self, audio_path: str, hotwords: Optional[str], max_new_tokens: int) -> DiarizeResult:
