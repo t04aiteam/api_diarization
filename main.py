@@ -25,8 +25,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from contextlib import asynccontextmanager  # noqa: E402
-
 from fastapi import FastAPI, Request  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
@@ -36,20 +34,12 @@ from routes.diarize import router as diarize_router  # noqa: E402
 from schemas.response import HealthResponse  # noqa: E402
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Load the default backend once at startup (can take minutes for ~18 GB
-    # of weights) so /health only answers once the service is actually ready.
-    registry.preload_default()
-    yield
-
-
 app = FastAPI(
     title="API Phien Am & Phan Tach Nguoi Noi (VibeVoice ASR)",
     description="Transcription + speaker-diarization REST API. POST /diarize "
     "returns timed, speaker-tagged segments with transcribed text.",
     version="1.0.0",
-    lifespan=lifespan,
+    lifespan=registry.lifespan,
 )
 
 app.add_middleware(
